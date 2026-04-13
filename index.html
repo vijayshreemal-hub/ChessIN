@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Ultimate Chess Pro</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Chess -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.css"/>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+
+  <style>
+    body {
+      text-align:center;
+      font-family:Arial;
+      background: linear-gradient(to right,#0f2027,#203a43,#2c5364);
+      color:white;
+    }
+
+    #board {
+      width:90vw;
+      max-width:400px;
+      margin:auto;
+    }
+
+    #chatBox {
+      height:120px;
+      overflow-y:scroll;
+      border:1px solid white;
+    }
+
+    button {
+      padding:10px;
+      border-radius:10px;
+      margin:5px;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>♟️ Ultimate Chess Pro</h1>
+
+<!-- Login -->
+<button onclick="signup()">Sign Up</button>
+<button onclick="login()">Login</button>
+
+<br><br>
+
+<!-- Difficulty -->
+<select id="level">
+  <option value="1">Easy</option>
+  <option value="2">Medium</option>
+  <option value="3">Hard</option>
+</select>
+
+<br><br>
+
+<!-- Multiplayer -->
+<input id="room" placeholder="Room Code">
+<button onclick="joinRoom()">Join Room</button>
+
+<div id="board"></div>
+
+<h3>⏱️ Timer: <span id="timer">5:00</span></h3>
+
+<h3>💬 Chat</h3>
+<div id="chatBox"></div>
+<input id="msg">
+<button onclick="sendMsg()">Send</button>
+
+<audio id="moveSound" src="https://www.soundjay.com/button/beep-07.wav"></audio>
+
+<script>
+
+/* 🔥 FIREBASE CONFIG (PUT YOURS) */
+const firebaseConfig = {
+  apiKey: "YOUR_KEY",
+  databaseURL: "YOUR_DB_URL"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+/* ♟️ GAME */
+let game = new Chess();
+let board;
+let room = "";
+let playerColor = "w";
+
+board = Chessboard('board', {
+  draggable:true,
+  position:'start',
+  onDrop:onDrop
+});
+
+/* 🔐 LOGIN */
+function signup(){
+  let e = prompt("Email");
+  let p = prompt("Password");
+  firebase.auth().createUserWithEmailAndPassword(e,p);
+}
+
+function login(){
+  let e = prompt("Email");
+  let p = prompt("Password");
+  firebase.auth().signInWithEmailAndPassword(e,p);
+}
+
+/* 🎯 LEVEL */
+function getDepth(){
+  let l = document.getElementById("level").value;
+  return parseInt(l);
+}
+
+/* 🌐 JOIN ROOM */
+function joinRoom(){
+  room = document.getElementById("room").value;
+
+  let ref = db.ref("rooms/"+room+"/players");
+
+  ref.once("value", snap=>{
+    let p = snap.val()||{};
+
+    if(!p.white){
+      playerColor="w";
+      ref.update({white:true});
+    } else {
+      playerColor="b";
+      ref.update({black:true});
+    }
+  });
+
+  db.ref("rooms/"+room+"/moves").on("child_added", data=>{
+    let move=data.val();
+    if(move){
+      game.move(move);
+      board.position(game.fen());
+    }
+  });
+}
+
+/* ♟️ MOVE */
+function onDrop(s,t){
+  if(game.turn()!=playerColor) return 'snapback';
+
+  let move=game.move({from:s,to:t,promotion:'q'});
+  if(!move) return 'snapback';
+
+  document.getElementById("moveSound").play();
+
+  if(room){
+    db.ref("rooms/"+room+"/moves").push(move);
+  } else {
+    setTimeout(makeBestMove,500);
+  }
+}
+
+/* 🤖 AI */
+function makeBestMove(){
+  let depth=getDepth();
+  let moves=game.moves({verbose:true});
+
+  let bestMove=null;
+  let bestVal=-9999;
+
+  for(let m of moves){
+    game.move(m);
+    let val=minimax(depth-1,false);
+    game.undo();
+
+    if(m.captured) val+=20;
+
+    if(val>bestVal){
+      bestVal=val;
+      bestMove=m;
+    }
+  }
+
+  if(depth==2 && Math.random()<0.25){
+    bestMove=moves[Math.floor(Math.random()*moves.length)];
+  }
+
+  game.move(bestMove);
+  board.position(game.fen());
+}
+
+/* 🧠 MINIMAX */
+function minimax(depth,isMax){
+  if(depth==0) return evaluate();
+
+  let moves=game.moves();
+
+  if(isMax){
+    let best=-9999;
+    for(let m of moves){
+      game.move(m);
+      best=Math.max(best,minimax(depth-1,false));
+      game.undo();
+    }
+    return best;
+  } else {
+    let best=9999;
+    for(let m of moves){
+      game.move(m);
+      best=Math.min(best,minimax(depth-1,true));
+      game.undo();
+    }
+    return best;
+  }
+}
+
+/* 📊 EVALUATE */
+function evaluate(){
+  let total=0;
+  let b=game.board();
+
+  const val={p:10,r:50,n:30,b:30,q:90,k:900};
+
+  for(let i=0;i<8;i++){
+    for(let j=0;j<8;j++){
+      let p=b[i][j];
+      if(p){
+        let v=val[p.type];
+        if(i>=2&&i<=5&&j>=2&&j<=5) v+=3;
+        total+=p.color==='w'?v:-v;
+      }
+    }
+  }
+  return total;
+}
+
+/* 💬 CHAT */
+function sendMsg(){
+  let msg=document.getElementById("msg").value;
+
+  if(room){
+    db.ref("rooms/"+room+"/chat").push({text:msg});
+  }
+
+  document.getElementById("chatBox").innerHTML+=`<p>${msg}</p>`;
+}
+
+/* ⏱️ TIMER */
+let time=300;
+setInterval(()=>{
+  time--;
+  let m=Math.floor(time/60);
+  let s=time%60;
+  document.getElementById("timer").innerText=
+    `${m}:${s<10?'0':''+s}`;
+},1000);
+
+</script>
+
+</body>
+</html>
